@@ -1,10 +1,12 @@
 import json
 import math
 import pandas as pd
+import geopandas as gpd
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
 CSV_PATH = ROOT / "data/raw/Ladesaeulenregister_BNetzA_2026-04-22.csv"
+STATES_PATH = ROOT / "data/bkg_states.geojson"
 OUT_PATH = ROOT / "data/chargers.geojson"
 
 df = pd.read_csv(CSV_PATH, sep=";", encoding="latin-1", skiprows=10, low_memory=False)
@@ -233,6 +235,23 @@ print(f"46. EVSE-ID6: {df['EVSE-ID6'].isna().sum()} null")
 # --- 47. Public Key6 → strip ---
 df["Public Key6"] = df["Public Key6"].str.strip()
 print(f"47. Public Key6: {df['Public Key6'].isna().sum()} null")
+
+# --- Layer 2: Geographic filtering ---
+before = len(df)
+gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df["Längengrad"], df["Breitengrad"]), crs="EPSG:4326")
+
+states = gpd.read_file(STATES_PATH)
+states_merged = states.dissolve(by="gen").reset_index()
+
+joined = gpd.sjoin(gdf, states_merged[["gen", "geometry"]], how="left", predicate="within")
+gdf = joined[joined["Bundesland"] == joined["gen"]].copy()
+gdf = gdf.drop(columns=["index_right", "gen"])
+
+dropped = before - len(gdf)
+print(f"\nGeographic filter: dropped {dropped} chargers outside their claimed Bundesland")
+print(f"Remaining: {len(gdf)}")
+
+df = pd.DataFrame(gdf.drop(columns="geometry"))
 
 # --- Write GeoJSON ---
 records = [
