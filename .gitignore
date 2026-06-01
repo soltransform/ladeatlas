@@ -1,12 +1,12 @@
 # large data files
-data/*.tif
-data/*.tiff
-data/*.csv
-data/*.zip
-data/*.shp
-data/*.dbf
-data/*.shx
-data/*.prj
+data/**/*.tif
+data/**/*.tiff
+data/**/*.csv
+data/**/*.zip
+data/**/*.shp
+data/**/*.dbf
+data/**/*.shx
+data/**/*.prj
 
 # OS noise
 .DS_Store
