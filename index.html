@@ -7,26 +7,93 @@
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl/dist/maplibre-gl.css">
   <script src="https://unpkg.com/maplibre-gl/dist/maplibre-gl.js"></script>
   <style>
-    #map {
-      width: 100%;
-      height: 100vh;
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    #sidebar {
+      position: fixed; top: 0; left: 0; width: 300px; height: 100vh;
+      background: #1a1a2e; color: #e0e0e0; z-index: 10;
+      display: flex; flex-direction: column; overflow-y: auto;
     }
+    #sidebar h1 { font-size: 18px; padding: 16px; border-bottom: 1px solid #333; }
+    #sidebar section { padding: 12px 16px; border-bottom: 1px solid #333; }
+    #sidebar label { display: block; font-size: 12px; color: #888; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+    #sidebar select {
+      width: 100%; padding: 8px; background: #16213e; color: #e0e0e0;
+      border: 1px solid #444; border-radius: 4px; font-size: 14px;
+    }
+    #stats { font-size: 13px; line-height: 1.6; }
+    #stats span { color: #00b4d8; font-weight: 600; }
+    #map { position: fixed; top: 0; left: 300px; width: calc(100% - 300px); height: 100vh; }
+    .maplibregl-popup-content {
+      background: #1a1a2e; color: #e0e0e0; border-radius: 6px;
+      padding: 12px 16px; font-size: 13px; line-height: 1.5; max-width: 320px;
+    }
+    .maplibregl-popup-content strong { color: #00b4d8; }
+    .maplibregl-popup-tip { border-top-color: #1a1a2e; }
+    .maplibregl-popup-close-button { color: #888; font-size: 18px; padding: 4px 8px; }
   </style>
 </head>
 <body>
+  <div id="sidebar">
+    <h1>Ladeatlas</h1>
+    <section>
+      <label>Bundesland</label>
+      <select id="state-filter">
+        <option value="">Alle</option>
+      </select>
+    </section>
+    <section id="stats"></section>
+  </div>
   <div id="map"></div>
   <script>
     const map = new maplibregl.Map({
       container: 'map',
       style: 'https://api.maptiler.com/maps/dataviz-v4/style.json?key=DZSLzpOKk8lkcoLakoMW',
       center: [10.4, 51.2],
-      zoom: 5
+      zoom: 5.5
     });
 
-    map.on('load', () => {
-      map.addSource('chargers', {
-        type: 'geojson',
-        data: 'data/chargers.geojson'
+    const stateFilter = document.getElementById('state-filter');
+    const statsEl = document.getElementById('stats');
+    let popup = null;
+    let chargersData = null;
+    let statesData = null;
+
+    Promise.all([
+      fetch('data/chargers.geojson').then(r => r.json()),
+      fetch('data/bkg_states.geojson').then(r => r.json())
+    ]).then(([chargers, states]) => {
+      chargersData = chargers;
+      statesData = states;
+      map.on('load', () => init());
+      if (map.loaded()) init();
+    });
+
+    function init() {
+      map.addSource('chargers', { type: 'geojson', data: chargersData });
+      map.addSource('states', { type: 'geojson', data: statesData });
+
+      map.addLayer({
+        id: 'state-fill',
+        type: 'fill',
+        source: 'states',
+        paint: { 'fill-color': '#00b4d8', 'fill-opacity': 0.05 },
+        filter: ['==', 'gen', '']
+      });
+
+      map.addLayer({
+        id: 'state-border',
+        type: 'line',
+        source: 'states',
+        paint: { 'line-color': '#888', 'line-width': 1, 'line-opacity': 0.3 }
+      });
+
+      map.addLayer({
+        id: 'state-border-selected',
+        type: 'line',
+        source: 'states',
+        paint: { 'line-color': '#00b4d8', 'line-width': 2.5 },
+        filter: ['==', 'gen', '']
       });
 
       map.addLayer({
@@ -39,7 +106,74 @@
           'circle-opacity': 1
         }
       });
-    });
+
+      const stateNames = [...new Set(chargersData.features.map(f => f.properties['Bundesland']).filter(Boolean))].sort();
+      stateNames.forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s;
+        opt.textContent = s;
+        stateFilter.appendChild(opt);
+      });
+      updateStats(chargersData.features.length, chargersData.features.length);
+
+      stateFilter.addEventListener('change', () => {
+        const val = stateFilter.value;
+        if (val) {
+          map.setFilter('chargers-circle', ['==', ['get', 'Bundesland'], val]);
+          map.setFilter('state-fill', ['==', 'gen', val]);
+          map.setFilter('state-border-selected', ['==', 'gen', val]);
+
+          const stateFeatures = statesData.features.filter(f => f.properties.gen === val);
+          if (stateFeatures.length > 0) {
+            const bounds = new maplibregl.LngLatBounds();
+            const addCoords = (coords) => {
+              if (typeof coords[0] === 'number') bounds.extend(coords);
+              else coords.forEach(addCoords);
+            };
+            stateFeatures.forEach(f => addCoords(f.geometry.coordinates));
+            map.fitBounds(bounds, { padding: 40 });
+          }
+
+          const filtered = chargersData.features.filter(f => f.properties['Bundesland'] === val).length;
+          updateStats(filtered, chargersData.features.length);
+        } else {
+          map.setFilter('chargers-circle', null);
+          map.setFilter('state-fill', ['==', 'gen', '']);
+          map.setFilter('state-border-selected', ['==', 'gen', '']);
+          map.flyTo({ center: [10.4, 51.2], zoom: 5.5 });
+          updateStats(chargersData.features.length, chargersData.features.length);
+        }
+      });
+
+      // Click popup
+      map.on('click', 'chargers-circle', (e) => {
+        if (popup) popup.remove();
+        const p = e.features[0].properties;
+        const addr = [p['Straße'], p['Hausnummer']].filter(Boolean).join(' ');
+        const loc = [p['Postleitzahl'], p['Ort']].filter(Boolean).join(' ');
+        const html = `
+          <strong>${p['Betreiber'] || 'Unbekannt'}</strong><br>
+          ${addr}<br>${loc}<br>
+          ${p['Bundesland'] || ''}<br><br>
+          Ladepunkte: ${p['Anzahl Ladepunkte'] || '?'}<br>
+          Leistung: ${p['Nennleistung Ladeeinrichtung [kW]'] || '?'} kW<br>
+          Typ: ${p['Art der Ladeeinrichtung'] || '?'}<br>
+          Stecker: ${p['Steckertypen1'] || '?'}<br>
+          Inbetriebnahme: ${p['Inbetriebnahmedatum'] || '?'}
+        `;
+        popup = new maplibregl.Popup({ offset: 8 })
+          .setLngLat(e.lngLat)
+          .setHTML(html)
+          .addTo(map);
+      });
+
+      map.on('mouseenter', 'chargers-circle', () => { map.getCanvas().style.cursor = 'pointer'; });
+      map.on('mouseleave', 'chargers-circle', () => { map.getCanvas().style.cursor = ''; });
+    }
+
+    function updateStats(shown, total) {
+      statsEl.innerHTML = `Chargers: <span>${shown.toLocaleString('de-DE')}</span> / ${total.toLocaleString('de-DE')}`;
+    }
   </script>
 </body>
 </html>
