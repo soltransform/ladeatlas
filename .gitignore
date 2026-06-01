@@ -1,4 +1,5 @@
 # large data files
+data/**/*.geojson
 data/**/*.tif
 data/**/*.tiff
 data/**/*.csv
